@@ -32,6 +32,16 @@ import pickle
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import train_test_split
 
+#====
+import numpy as np
+import keras
+from keras.models import Sequential
+from keras.layers import Dense
+
+import pandas as pd
+from sklearn import preprocessing
+from sklearn.model_selection import train_test_split
+
 
 # ========================= 2. THE PRICING MODEL ===============================
 class PricingModel():
@@ -49,10 +59,26 @@ class PricingModel():
         # =============================================================
         # This line ensures that your file (pricing_model.py) and the saved
         # model are consistent and can be used together.
-        self._init_consistency_check()  # DO NOT REMOVE
+        #self._init_consistency_check()  # DO NOT REMOVE
+        self.model = self.build_sigm15_relu10_sigm10_lin()
+
+    def build_sigm15_relu10_sigm10_lin(self):
+
+        model = Sequential()
+        model.add(Dense(15, input_dim=46, activation='relu'))
+        model.add(Dense(10, activation='relu'))
+        model.add(Dense(10, activation='softmax'))
+        model.add(Dense(1))
 
 
-    def _preprocessor(self, X_raw):
+        optimizer = 'adam'
+
+        model.compile(loss='mse',
+                      optimizer=optimizer,
+                      metrics=['mae', 'mse'])
+        return model
+
+    def _preprocessor(self, X_raw, training = False):
         """
 
         This function prepares the features of the data for training,
@@ -71,7 +97,74 @@ class PricingModel():
         # =============================================================
         # YOUR CODE HERE
 
-        return None
+        columns_x = ['pol_bonus', 'pol_coverage', 'pol_duration',
+                     'pol_sit_duration', 'pol_pay_freq', 'pol_payd', 'pol_usage',
+                     'drv_drv2', 'drv_age1', 'drv_age2', 'drv_sex1',
+                     'drv_sex2', 'drv_age_lic1', 'drv_age_lic2', 'vh_age', 'vh_cyl',
+                     'vh_din', 'vh_fuel', 'vh_make', 'vh_sale_begin',
+                     'vh_sale_end', 'vh_speed', 'vh_type', 'vh_value', 'vh_weight',
+                     'town_mean_altitude', 'town_surface_area', 'population', 'city_district_code',
+                     ]
+
+        x_data_un = X_raw[columns_x]
+
+        cat_to_int_dict = {'pol_coverage': {'Mini': 0, 'Median1': 1, 'Median2': 2, 'Maxi': 3},
+                           'pol_pay_freq': {'Monthly': 0, 'Quarterly': 1, 'Biannual': 2, 'Yearly': 3},
+                           'pol_payd': {'No': 0, 'Yes': 1},
+                           'pol_usage': {'Retired': 0, 'WorkPrivate': 1, 'Professional': 2, 'AllTrips': 3},
+                           'drv_drv2': {'No': 0, 'Yes': 1},
+                           'drv_sex1': {'F': 0, 'M': 1},
+                           'drv_sex2': {'F': -1, 'M': 1, None: 0},
+                           'vh_type': {'Tourism': 0, 'Commercial': 1, }
+                           }
+
+        def car_make_categories(car_make):
+            if car_make in ['RENAULT', 'PEUGEOT', 'CITROEN', 'VOLKSWAGEN', 'FORD', 'MERCEDES BENZ']:
+                return car_make
+            else:
+                return 'OTHER'
+
+        def missing_geo_data(x):
+            if x:
+                return 1
+            else:
+                return 0
+
+        def zero_vh_weight(weight, avg_weight):
+            if weight < 100:
+                return avg_weight
+            else:
+                return weight
+
+        x_data_f = x_data_un.replace(cat_to_int_dict, inplace=False)
+
+        x_data_f.vh_make = x_data_f['vh_make'].apply(lambda x: car_make_categories(x))
+
+        ##MAKE INDEP
+        avg_vh_weight = x_data_f['vh_weight'].mean()
+        x_data_f.vh_weight = x_data_f['vh_weight'].apply(lambda x: zero_vh_weight(x, avg_vh_weight))
+
+        vh_make_cols = pd.get_dummies(x_data_f.vh_make)
+        vh_fuel_cols = pd.get_dummies(x_data_f.vh_fuel)
+        city_dist_cols = pd.get_dummies(x_data_f.city_district_code)
+        x_data_f = x_data_f.drop(['vh_fuel', 'vh_make', 'city_district_code'], axis=1)
+
+        x_data_f['geoNA'] = (x_data_un['population'].isnull()).apply(lambda x: missing_geo_data(x))
+
+        x_data_f = pd.concat([x_data_f, vh_make_cols, vh_fuel_cols, city_dist_cols], axis=1, sort=False)
+
+        #NEED TO CHANGE MEANS SO THAT ITS INDEPENDENT
+        means = x_data_f.mean()
+        x_data_f = x_data_f.fillna(means)
+
+        #SIMILIAARLY I NEED TO CHANGE THIS SCALER SO THAT ITS INDEPENDENT
+        scaler = preprocessing.MinMaxScaler()
+        if training == True:
+            self.scaler = preprocessing.StandardScaler().fit(x_data_f)
+
+        X = pd.DataFrame(scaler.fit_transform(x_data_f), columns=x_data_f.columns, index=x_data_f.index)
+
+        return X
 
 
     def fit(self, X_raw, y_made_claim, y_claims_amount):
@@ -93,7 +186,13 @@ class PricingModel():
         # YOUR CODE HERE
 
         # Remember to include a line similar to the one below
-        # X_clean = self._preprocessor(X_raw)
+        X_clean = self._preprocessor(X_raw, training = True)
+
+        early_stop = keras.callbacks.EarlyStopping(monitor='val_loss', patience=10)
+        print('training model')
+        (self.model).fit(X_clean, y_claims_amount,
+                            epochs=10000, verbose=1, validation_split=0.2,
+                            callbacks=[early_stop])
 
         return None
 
@@ -119,9 +218,10 @@ class PricingModel():
         # YOUR CODE HERE
 
         # Remember to include a line similar to the one below
-        # X_clean = self._preprocessor(X_raw)
+        X_clean = self._preprocessor(X_raw)
+        predicted_claim_amounts = ((self.model).predict(X_clean)).reshape(X_clean.shape[0])
 
-        return None
+        return predicted_claim_amounts
 
 
     def save_model(self):
@@ -154,7 +254,6 @@ class PricingModel():
         except Exception as err:
             print('There was an error when saving the consistency check: '
                   '%s (your model will still work).' % err)
-
 
 
 
@@ -242,5 +341,7 @@ if __name__ == '__main__':
     predictions1 = my_pricing_model.predict_premium(X_train)
     predictions2 = loaded_model.predict_premium(X_train)
 
+    print(predictions1)
+    print(predictions2)
     # ensure that the prices are the same
     assert np.array_equal(predictions1, predictions2)
