@@ -65,9 +65,9 @@ class PricingModel():
     def build_sigm15_relu10_sigm10_lin(self):
 
         model = Sequential()
-        model.add(Dense(15, input_dim=46, activation='relu'))
+        model.add(Dense(15, input_dim=46, activation='sigmoid'))
         model.add(Dense(10, activation='relu'))
-        model.add(Dense(10, activation='softmax'))
+        model.add(Dense(10, activation='sigmoid'))
         model.add(Dense(1))
 
 
